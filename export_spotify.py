@@ -2,6 +2,8 @@ from pathlib import Path
 import datetime
 import json
 
+MIN_LENGTH_SECONDS = 30
+
 folder = Path("spotify_data")
 files = list(folder.glob('*.json'))
 outfile = open("spotify_data.txt", "w", encoding="utf-8")
@@ -11,8 +13,8 @@ for i, path in enumerate(files):
         data = json.load(f)
 
     for value in data:
-        if value["ms_played"] < 30000:
-            # skip songs played under 30s
+        if value["ms_played"] < MIN_LENGTH_SECONDS * 1000:
+            # skip songs played under the min length
             continue
 
         timestamp = int(datetime.datetime.fromisoformat(value["ts"].replace("Z", "+00:00")).timestamp())

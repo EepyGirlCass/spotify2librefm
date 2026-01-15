@@ -5,8 +5,10 @@ import sys
 import os
 import json
 import webbrowser
+import traceback
 from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import urlopen, Request
+from itertools import islice
 
 API_URL = "https://libre.fm/2.0/"
 API_KEY = "LibreImporter"
@@ -194,12 +196,16 @@ def main():
 
     try:
         with open(filename, "r", encoding="utf-8") as f:
-            current_line_number = 0
             songs = []
-            for line in f:
-                current_line_number += 1
-                if current_line_number < start_line:
-                    continue
+            total_lines = sum(1 for _ in f)
+            continue_time = time.time()
+
+            start_time = time.time()
+            start_percent = round(100 * start_line / total_lines, 1)
+
+            f.seek(0)
+
+            for current_line_number, line in enumerate(islice(f, start_line-1, None), start=start_line):
 
                 parts = line.strip().split("\t")
                 if len(parts) < 4:
@@ -216,31 +222,79 @@ def main():
                 songs.append({"timestamp": timestamp, "track": track, "artist": artist, "album": album})
 
                 if len(songs) == 50:
-                    result = scrobble_track(songs)
                     done = False
                     while not done:
+                        while time.time() < continue_time:
+                            time.sleep(0.1)
+
+                        continue_time = time.time() + SLEEP_BETWEEN_SCROBBLES
+
+                        result = scrobble_track(songs)
                         if result:
                             save_current_line(current_line_number)
-                            print(f"SUCCESS {current_line_number}: {artist} - {track} | response: {result}")
+                            current_percent = round(100 * current_line_number / total_lines, 1)
+                            try:
+                                estimated_time = (100 - current_percent) * (
+                                        (time.time() - start_time) / (current_percent - start_percent)
+                                )
+                            except ZeroDivisionError:
+                                estimated_time = 1 << 16
+                            print(f"SUCCESS: {current_percent}%"
+                                  f"\t{current_line_number}/{total_lines}"
+                                  f"\tEstimated completion time: {time.ctime(time.time() + estimated_time)}")
+                            if not result["scrobbles"]["@attr"]["ignored"] == "0":
+                                ignored = []
+                                for scrobble in result["scrobbles"]["scrobble"]:
+                                    if not scrobble["ignoredMessage"]["code"] == "0":
+                                        ignored.append(scrobble)
+                                        if len(ignored) == result["scrobbles"]["@attr"]["ignored"]:
+                                            break
+                                print(f"{result['scrobbles']['@attr']['ignored']} scrobble(s) ignored:")
+                                for scrobble in ignored:
+                                    print(f"\t{scrobble['artist']['#text']} - {scrobble['track']['#text']}: "
+                                          f"{scrobble['ignoredMessage']['#text']}")
                             songs = []
                             done = True
                         else:
-                            print(f"FAIL {current_line_number}: {artist} - {track} | Failed to scrobble.")
-                            time.sleep(SLEEP_BETWEEN_SCROBBLES)
-
-                    time.sleep(SLEEP_BETWEEN_SCROBBLES)
+                            print(f"FAIL {current_line_number - 50}-{current_line_number}: Failed to scrobble.")
+                            print(f"Waiting {SLEEP_BETWEEN_SCROBBLES} seconds to try again.")
 
             if len(songs) > 0:
-                result = scrobble_track(songs)
                 done = False
                 while not done:
+                    while time.time() < continue_time:
+                        time.sleep(0.1)
+
+                    continue_time = time.time() + SLEEP_BETWEEN_SCROBBLES
+
+                    result = scrobble_track(songs)
                     if result:
                         save_current_line(current_line_number)
-                        print(f"SUCCESS {current_line_number}: {artist} - {track} | response: {result}")
+                        current_percent = round(100 * current_line_number / total_lines, 1)
+                        try:
+                            estimated_time = (100 - current_percent) * (
+                                    (time.time() - start_time) / (current_percent - start_percent)
+                            )
+                        except ZeroDivisionError:
+                            estimated_time = 1 << 16
+                        print(f"SUCCESS: {current_percent}%"
+                              f"\t{current_line_number}/{total_lines}"
+                              f"\tEstimated completion time: {time.ctime(time.time() + estimated_time)}")
+                        if not result["scrobbles"]["@attr"]["ignored"] == "0":
+                            ignored = []
+                            for scrobble in result["scrobbles"]["scrobble"]:
+                                if not scrobble["ignoredMessage"]["code"] == "0":
+                                    ignored.append(scrobble)
+                                    if len(ignored) == result["scrobbles"]["@attr"]["ignored"]:
+                                        break
+                            print(f"{result['scrobbles']['@attr']['ignored']} scrobble(s) ignored:")
+                            for scrobble in ignored:
+                                print(f"\t{scrobble['artist']['#text']} - {scrobble['track']['#text']}: "
+                                      f"{scrobble['ignoredMessage']['#text']}")
                         done = True
                     else:
-                        print(f"FAIL {current_line_number}: {artist} - {track} | Failed to scrobble.")
-                        time.sleep(SLEEP_BETWEEN_SCROBBLES)
+                        print(f"FAIL {current_line_number - 50}-{current_line_number}: Failed to scrobble.")
+                        print(f"Waiting {SLEEP_BETWEEN_SCROBBLES} seconds to try again.")
 
     except FileNotFoundError:
         print(f"File not found: {filename}")
@@ -250,6 +304,7 @@ def main():
         sys.exit(0)
     except Exception as e:
         print(f"Something totally unexpected happened: {e}")
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
